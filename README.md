@@ -1,7 +1,8 @@
 # thymio-road-network
 This semester project was made in colaboration with Benjamin Kern.
 
-![thymio-road-network](https://github.com/loicdubois/thymio-road-network/blob/main/documentation/thymio-road-network.jpg)
+[![thymio-road-network](https://github.com/loicdubois/thymio-road-network/blob/main/documentation/thymio-road-network.jpg)](https://www.youtube.com/watch?v=cV4ZRwwuIH8)
+(Click the picture to watch a video of the network in action)
 
 ## Description
 This project consisted in the realisation of a road network for the [Thymio](https://www.thymio.org/), an educative robot with many sensors and actuators.
