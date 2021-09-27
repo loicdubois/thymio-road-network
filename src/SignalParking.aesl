@@ -1,0 +1,185 @@
+<!DOCTYPE aesl-source>
+<network>
+
+
+<!--list of global events-->
+<event size="0" name="Reception"/>
+<event size="1" name="reception2"/>
+
+
+<!--list of constants-->
+<constant value="0" name="ear_sc"/>
+<constant value="1" name="tell_sc"/>
+<constant value="20" name="max_comm"/>
+<constant value="2" name="ask_sc"/>
+
+
+<!--show keywords state-->
+<keywords flag="true"/>
+
+
+<!--node thymio-II-->
+<node nodeId="1" name="thymio-II">var communication[max_comm]=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+var indexComm = 0
+var indexDebut=0
+var state_comm=tell_sc
+var last_ok =1
+var i=0
+var thymio_pos[2]
+var thymio_bef[2]
+var index_thymio=0
+#0=all stop
+#1=green 1
+#2=green 2
+#3=green 3
+#4=green 4
+var pos[1]=[12]
+var signal=0
+var tab_tell[1]
+var compteur=5
+var green=1
+var envoie
+
+		
+sub gestionComm
+	for i in 0:19 do
+		if communication[i]==3 then
+			indexDebut=i
+		end
+
+	end
+	thymio_pos[index_thymio]=communication[indexDebut+1]-1000
+	thymio_bef[index_thymio]=communication[indexDebut+2]-1000
+	state_comm=tell_sc
+
+
+sub tell
+	signal++
+	if signal>2 then
+		signal=1
+	end
+
+	
+	if signal==1 then
+		call leds.circle(0,0,1,0,0,0,0,0)
+		call leds.top(12,0,12)
+		envoie=pos[0]+40
+	elseif signal==2 then
+		call leds.circle(0,0,0,0,0,0,1,0)
+		call leds.top(0,12,12)
+		envoie=pos[0]+20
+	elseif signal==3 then
+		call leds.circle(1,1,1,0,0,0,0,0)
+	elseif signal==4 then
+		call leds.circle(1,1,1,1,0,1,0,0)
+	end
+		#prox.comm.tx=pos[signal-1]+20
+		#call leds.top(0,10,0)
+	
+		
+		#call leds.top(10,0,0)
+		
+	
+	
+
+sub allStart
+
+onevent buttons
+	if  button.forward == 1 then
+		call prox.comm.enable(1)
+		timer.period[0]=500
+	end
+		
+onevent button.center
+	if  button.center == 1 then
+	call prox.comm.enable(0)
+	indexComm = 0
+ indexDebut=0
+ state_comm=tell_sc
+ last_ok =1
+ i=0
+end
+	
+onevent button.backward
+	if button.backward==1  then
+		call leds.top(0,0,0)
+		call leds.circle(0,0,0,0,0,0,0,0)
+		prox.comm.tx=0b0
+		call prox.comm.enable(0)
+	end
+onevent button.left
+	callsub tell
+	
+onevent timer0
+	compteur++
+	if  compteur>75 then
+		compteur=0
+		if state_comm==tell_sc  then
+			callsub tell
+		end
+	end
+	prox.comm.tx=envoie
+	if state_comm==ask_sc then
+		prox.comm.tx=1
+	end
+	if state_comm==tell_sc  then
+		#callsub tell
+	end
+#Instruction#
+#code==
+#1==Bonjour#
+#3==Début#
+#4==Fin#
+#5==Position#
+#6==Etat#
+#7==Stop#
+#8==Start#
+#9==Voie libre#
+#10==ok1#
+#11==ok2#
+#position =x -1000
+		
+onevent prox.comm
+	if state_comm==tell_sc then
+		if  prox.comm.rx==1 then
+			state_comm=ask_sc
+			prox.comm.tx=1
+		end
+	end
+	if state_comm==ask_sc then
+		if prox.comm.rx==3  then
+			state_comm=ear_sc
+			indexComm=0
+			prox.comm.tx=11
+			last_ok=2
+			communication[indexComm]=prox.comm.rx
+			
+		end
+	end
+	if state_comm==ear_sc then
+		if communication[indexComm]!=prox.comm.rx then
+			indexComm++
+			if indexComm == max_comm then
+				indexComm=0
+			end
+			communication[indexComm]=prox.comm.rx
+			if  last_ok == 1 then
+				prox.comm.tx=11
+				last_ok = 2
+			else
+				prox.comm.tx=10
+				last_ok = 1
+			end
+			if prox.comm.rx==4 then
+				callsub gestionComm
+			elseif prox.comm.rx==7 then
+			
+			elseif prox.comm.rx==8 then
+				
+			end
+		end
+			
+	end</node>
+
+
+</network>

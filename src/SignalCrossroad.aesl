@@ -1,0 +1,532 @@
+<!DOCTYPE aesl-source>
+<network>
+
+
+<!--list of global events-->
+<event size="0" name="Reception"/>
+<event size="1" name="reception2"/>
+<event size="2" name="slavecarrefour2"/>
+<event size="2" name="slavecarrefour3"/>
+<event size="4" name="mastercarrefour2"/>
+<event size="4" name="mastercarrefour3"/>
+
+
+<!--list of constants-->
+<constant value="0" name="ear_sc"/>
+<constant value="1" name="tell_sc"/>
+<constant value="20" name="max_comm"/>
+<constant value="2" name="ask_sc"/>
+
+
+<!--show keywords state-->
+<keywords flag="true"/>
+
+
+<!--node thymio-II-->
+<node nodeId="44498" name="thymio-II">call prox.comm.enable(1)
+
+onevent slavecarrefour3
+	prox.comm.tx=event.args[1]
+	
+onevent prox.comm
+	emit mastercarrefour3([event.args[0],event.args[1],event.args[2],prox.comm.rx])</node>
+
+
+<!--node thymio-II-->
+<node nodeId="58057" name="thymio-II">#Communication storage tab
+var communication[max_comm]=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+var indexComm = 0
+var indexDebut=0
+
+#State variable
+var state_comm=tell_sc
+var last_ok =1
+var i=0
+var thymio_pos[2]
+var thymio_bef[2]
+var index_thymio=0
+var envoie
+var node
+var count=0
+var compteurAsk=0
+var indicePos
+var resetquantite=0
+var phase=0
+
+#phase of the road controlled by the signal
+#0=all stop
+#1=green 1
+#2=green 2
+#3=green 3
+#4=green 4
+#Node connected to the cross-road controled by the signal
+var pos[4]=[0,3,1,10]
+var signal=1
+var quantity[4]=[1,1,1,1]
+var greentime[4]=[25,25,25,25]
+var cycletime=575
+var lostTime=15*5*4
+var quantite
+var tab_tell[1]
+
+var compteur
+var green=1
+var temp=0
+var greenTotal=cycletime-lostTime
+
+call prox.comm.enable(1)
+timer.period[0]=200		
+
+# sub for the communication
+sub gestionComm
+	for i in 0:19 do
+		if communication[i]==3 then
+			indexDebut=i
+		end
+
+	end
+	thymio_pos[index_thymio]=communication[indexDebut+1]-60
+	thymio_bef[index_thymio]=communication[indexDebut+2]-60
+	state_comm=tell_sc
+
+#sub for the broadcastdisc
+sub tell
+	signal++
+
+	if signal>3 then
+		signal=0
+	end
+
+	if signal==phase then
+			if signal==0 then
+		call leds.circle(1,0,0,0,0,0,0,0)
+	elseif signal==1 then
+		call leds.circle(0,0,1,0,0,0,0,0)
+	elseif signal==2 then
+		call leds.circle(0,0,0,0,1,0,0,0)
+	elseif signal==3 then
+		call leds.circle(0,0,0,0,0,0,1,0)
+	end
+		if  green>(lostTime/4) then
+			envoie=pos[signal]+40
+		else
+			envoie=pos[signal]+20
+		end
+	else
+		#all phases red time
+		envoie=pos[signal]+20
+	end
+	
+	prox.comm.tx=envoie
+	#event to use the slave robot to send the broadcast disc
+	emit slavecarrefour2([envoie,event.args[1]])
+sub updateQuantity
+	node = ((temp-100)%20)
+	quantite = ((temp-100-node)/20) + 1
+	indicePos=-1
+	if  quantite &lt; 1 then
+		quantite=1
+	elseif quantite > 8 then
+		quantite=8
+	end
+	
+	for  i in 0:3 do
+		if  node==pos[i] then
+			indicePos=i
+		end
+	end
+	if  indicePos!=-1 then
+		quantity[indicePos]=quantite
+	end
+	quantite=quantity[0]+quantity[1]+quantity[2]+quantity[3]
+	resetquantite=0
+	for  i in 0:3 do
+		greentime[i]=(100*quantity[i])/(quantite)
+	end
+
+onevent mastercarrefour2
+	temp=event.args[2]
+	callsub updateQuantity
+
+
+onevent buttons
+	if  button.forward == 1 then
+		call prox.comm.enable(1)
+		timer.period[0]=200
+	end
+		
+onevent button.center
+	if  button.center == 1 then
+	call prox.comm.enable(0)
+	indexComm = 0
+ 	indexDebut=0
+ 	state_comm=tell_sc
+ 	last_ok =1
+ 	i=0
+end
+
+onevent button.left
+green = 4
+
+onevent button.right
+green = 1
+	
+onevent button.backward
+	if button.backward==1  then
+		call leds.top(0,0,0)
+		call leds.circle(0,0,0,0,0,0,0,0)
+		prox.comm.tx=0b0
+		call prox.comm.enable(0)
+	end
+
+onevent timer0
+	compteur++
+	
+	green++
+	if  phase>3 then
+		phase=0
+	end
+	#l'intéere serai de calculer le nouveau cycle a chaque fin de cycletime
+	##
+	if  compteur > cycletime then
+		#calcul de nouveau cycletime
+		quantite=quantity[0]+quantity[1]+quantity[2]+quantity[3]
+		cycletime = quantite * 5 + 65
+		#conversion en variable de compteur 
+		cycletime=cycletime*5
+		#calcul de temps de vert moyen
+		greenTotal=cycletime-lostTime
+		##le temps de chaque feu est egal a greenTotal/4*greentime[i]/100
+		##remise a zero des quantités
+		quantity=[1,1,1,1]
+		compteur=0
+		green=0
+		phase=0
+	end
+	
+	#time contrôle of the lights
+	if  green>((greenTotal*greentime[phase])/100 + lostTime/4) then
+		green=0
+		phase++
+	
+	end
+	if state_comm==tell_sc  then
+		callsub tell
+	end
+#Instruction#
+#code==
+#1==Bonjour#
+#3==Début#
+#4==Fin#
+#5==Position#
+#6==Etat#
+#7==Stop#
+#8==Start#
+#9==Voie libre#
+#10==ok1#
+#11==ok2#
+#position =x -1000
+		
+onevent prox.comm
+ 	#state machine
+	if state_comm==tell_sc then
+		if  prox.comm.rx==1 then
+			state_comm=ask_sc
+			compteurAsk=0
+			prox.comm.tx=1
+		end
+		if  prox.comm.rx>100 then
+				temp=prox.comm.rx
+				callsub updateQuantity
+		end
+	end
+	if state_comm==ask_sc then
+		if prox.comm.rx==3  then
+			state_comm=ear_sc
+			indexComm=0
+			prox.comm.tx=11
+			last_ok=2
+			communication[indexComm]=prox.comm.rx
+			
+		end
+	end
+	if state_comm==ear_sc then
+		if communication[indexComm]!=prox.comm.rx then
+			indexComm++
+			if indexComm == max_comm then
+				indexComm=0
+			end
+			communication[indexComm]=prox.comm.rx
+			if  last_ok == 1 then
+				prox.comm.tx=11
+				last_ok = 2
+			else
+				prox.comm.tx=10
+				last_ok = 1
+			end
+			if prox.comm.rx==4 then
+				callsub gestionComm
+			elseif prox.comm.rx==7 then
+			
+			elseif prox.comm.rx==8 then
+				
+			end
+		end
+			
+	end</node>
+
+
+<!--node thymio-II-->
+<node nodeId="52937" name="thymio-II">var communication[max_comm]=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+var indexComm = 0
+var indexDebut=0
+
+#State variable
+var state_comm=tell_sc
+var last_ok =1
+var i=0
+var thymio_pos[2]
+var thymio_bef[2]
+var index_thymio=0
+var envoie
+var node
+var count=0
+var compteurAsk=0
+var indicePos
+var resetquantite=0
+var phase=0
+
+#phase of the road controlled by the signal
+#0=all stop
+#1=green 1
+#2=green 2
+#3=green 3
+#4=green 4
+#Node connected to the cross-road controled by the signal
+var pos[4]=[4,2,7,3]
+var signal=1
+var quantity[4]=[1,1,1,1]
+var greentime[4]=[25,25,25,25]
+var cycletime=575
+var lostTime=15*5*4
+var quantite
+var tab_tell[1]
+
+var compteur
+var green=1
+var temp=0
+var greenTotal=cycletime-lostTime
+
+call prox.comm.enable(1)
+timer.period[0]=200		
+
+# sub for the communication
+sub gestionComm
+	for i in 0:19 do
+		if communication[i]==3 then
+			indexDebut=i
+		end
+
+	end
+	thymio_pos[index_thymio]=communication[indexDebut+1]-60
+	thymio_bef[index_thymio]=communication[indexDebut+2]-60
+	state_comm=tell_sc
+
+#sub for the broadcastdisc
+sub tell
+	signal++
+
+	if signal>3 then
+		signal=0
+	end
+
+	if signal==phase then
+			if signal==0 then
+		call leds.circle(1,0,0,0,0,0,0,0)
+	elseif signal==1 then
+		call leds.circle(0,0,1,0,0,0,0,0)
+	elseif signal==2 then
+		call leds.circle(0,0,0,0,1,0,0,0)
+	elseif signal==3 then
+		call leds.circle(0,0,0,0,0,0,1,0)
+	end
+		if  green>(lostTime/4) then
+			envoie=pos[signal]+40
+		else
+			envoie=pos[signal]+20
+		end
+	else
+		#all phases red time
+		envoie=pos[signal]+20
+	end
+	
+	prox.comm.tx=envoie
+	#event to use the slave robot to send the broadcast disc
+	emit slavecarrefour3([event.args[0],envoie])
+sub updateQuantity
+	node = ((temp-100)%20)
+	quantite = ((temp-100-node)/20) + 1
+	indicePos=-1
+	if  quantite &lt; 1 then
+		quantite=1
+	elseif quantite > 8 then
+		quantite=8
+	end
+	
+	for  i in 0:3 do
+		if  node==pos[i] then
+			indicePos=i
+		end
+	end
+	if  indicePos!=-1 then
+		quantity[indicePos]=quantite
+	end
+	quantite=quantity[0]+quantity[1]+quantity[2]+quantity[3]
+	resetquantite=0
+	for  i in 0:3 do
+		greentime[i]=(100*quantity[i])/(quantite)
+	end
+
+onevent mastercarrefour3
+	temp=event.args[3]
+	callsub updateQuantity
+
+
+onevent buttons
+	if  button.forward == 1 then
+		call prox.comm.enable(1)
+		timer.period[0]=200
+	end
+		
+onevent button.center
+	if  button.center == 1 then
+	call prox.comm.enable(0)
+	indexComm = 0
+ 	indexDebut=0
+ 	state_comm=tell_sc
+ 	last_ok =1
+ 	i=0
+end
+
+onevent button.left
+green = 4
+
+onevent button.right
+green = 1
+	
+onevent button.backward
+	if button.backward==1  then
+		call leds.top(0,0,0)
+		call leds.circle(0,0,0,0,0,0,0,0)
+		prox.comm.tx=0b0
+		call prox.comm.enable(0)
+	end
+
+onevent timer0
+	compteur++
+	
+	green++
+	if  phase>3 then
+		phase=0
+	end
+	#l'intéere serai de calculer le nouveau cycle a chaque fin de cycletime
+	##
+	if  compteur > cycletime then
+		#calcul de nouveau cycletime
+		quantite=quantity[0]+quantity[1]+quantity[2]+quantity[3]
+		cycletime = quantite * 5 + 65
+		#conversion en variable de compteur 
+		cycletime=cycletime*5
+		#calcul de temps de vert moyen
+		greenTotal=cycletime-lostTime
+		##le temps de chaque feu est egal a greenTotal/4*greentime[i]/100
+		##remise a zero des quantités
+		quantity=[1,1,1,1]
+		compteur=0
+		green=0
+		phase=0
+	end
+	
+	#time contrôle of the lights
+	if  green>((greenTotal*greentime[phase])/100 + lostTime/4) then
+		green=0
+		phase++
+	
+	end
+	if state_comm==tell_sc  then
+		callsub tell
+	end
+#Instruction#
+#code==
+#1==Bonjour#
+#3==Début#
+#4==Fin#
+#5==Position#
+#6==Etat#
+#7==Stop#
+#8==Start#
+#9==Voie libre#
+#10==ok1#
+#11==ok2#
+#position =x -1000
+		
+onevent prox.comm
+ 	#state machine
+	if state_comm==tell_sc then
+		if  prox.comm.rx==1 then
+			state_comm=ask_sc
+			compteurAsk=0
+			prox.comm.tx=1
+		end
+		if  prox.comm.rx>100 then
+				temp=prox.comm.rx
+				callsub updateQuantity
+		end
+	end
+	if state_comm==ask_sc then
+		if prox.comm.rx==3  then
+			state_comm=ear_sc
+			indexComm=0
+			prox.comm.tx=11
+			last_ok=2
+			communication[indexComm]=prox.comm.rx
+			
+		end
+	end
+	if state_comm==ear_sc then
+		if communication[indexComm]!=prox.comm.rx then
+			indexComm++
+			if indexComm == max_comm then
+				indexComm=0
+			end
+			communication[indexComm]=prox.comm.rx
+			if  last_ok == 1 then
+				prox.comm.tx=11
+				last_ok = 2
+			else
+				prox.comm.tx=10
+				last_ok = 1
+			end
+			if prox.comm.rx==4 then
+				callsub gestionComm
+			elseif prox.comm.rx==7 then
+			
+			elseif prox.comm.rx==8 then
+				
+			end
+		end
+			
+	end</node>
+
+
+<!--node thymio-II-->
+<node nodeId="50386" name="thymio-II">call prox.comm.enable(1)
+
+onevent slavecarrefour2
+	prox.comm.tx=event.args[0]
+	
+onevent prox.comm
+	emit mastercarrefour2([event.args[0],event.args[1],prox.comm.rx,event.args[3]])</node>
+
+
+</network>

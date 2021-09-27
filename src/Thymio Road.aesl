@@ -1,0 +1,739 @@
+<!DOCTYPE aesl-source>
+<network>
+
+
+<!--list of global events-->
+
+
+<!--list of constants-->
+<constant value="450" name="GREY_REF"/>
+<constant value="152" name="SPEED_LOW"/>
+<constant value="264" name="SPEED_MED"/>
+<constant value="416" name="SPEED_HIGH"/>
+<constant value="400" name="GREY_THRESH"/>
+<constant value="1000" name="OBS_PROX_THRESH"/>
+<constant value="3000" name="OBS_PROX_THRESH_MAX"/>
+<constant value="0" name="S_STOP"/>
+<constant value="1" name="S_ROAD"/>
+<constant value="2" name="S_READ"/>
+<constant value="3" name="S_ACTION"/>
+<constant value="4" name="S_EXIT"/>
+<constant value="5" name="S_CONTINUE"/>
+<constant value="6" name="S_BACK"/>
+<constant value="0" name="A_BRANCHING"/>
+<constant value="1" name="A_ROUNDABOUT"/>
+<constant value="2" name="A_CROSSROAD"/>
+<constant value="3" name="A_LOCATION"/>
+<constant value="0" name="DS_NOTHING"/>
+<constant value="0" name="DS_EXIT"/>
+<constant value="1" name="DS_CONTINUE"/>
+<constant value="2" name="DS_TURN_LEFT"/>
+<constant value="4" name="DS_STOP"/>
+<constant value="16" name="NB_NODE"/>
+<constant value="0" name="CS_EAR"/>
+<constant value="1" name="CS_TELL"/>
+
+
+<!--show keywords state-->
+<keywords flag="true"/>
+
+
+<!--node thymio-II-->
+<node nodeId="1" name="thymio-II">var state = S_STOP
+var oldState = S_STOP
+var decisionState =  DS_NOTHING
+
+var speedType = SPEED_LOW
+var savedSpeed = SPEED_LOW
+var savedSpeedInters = SPEED_LOW
+var addSpeedLeft = 0
+var addSpeedRight = 0
+
+var controlFactor = 1
+var intensityDiff = 0
+var intensityObst = 0
+var intensityDiffObst = 0
+var whiteThreshold = GREY_REF+200
+var proxInteriorFactor = 1 #7 if crossroad, 1 else
+
+var counter = 0
+var counterContinue = 0
+var counterStop = 0
+var counterRead = 0
+var code = 0
+var interval = 0
+var readLocation = 0
+var random = 0
+var actionType = A_CROSSROAD
+
+var timerON = 0
+var incrementCounter=1
+
+########
+#Variables for the intern map
+var map[NB_NODE]
+var maptype[NB_NODE]
+var orientedIntersection[8]
+var nodeTab[5]
+var newNode = 0
+var newNodeType = 1
+var currentNode =  10
+var oldNode = 5
+var positionError = 0
+var i = 0
+var stick
+var nodeCount=0
+var echange=0
+var t=0
+var indice
+var oldIndice = -1
+var counNode = 0
+var test2=1
+var countExit=1
+var nbRond=0
+var NbCont=2
+#communication variables
+var comm_state=CS_EAR
+var last_ok =11
+var l=0
+var countPing = 1
+
+#pos[0]= actual position
+#pos[1]= old position
+#variable for measurements
+var count=1
+
+#Map declaration
+#bit[0 and 1] = node type + address in the table orientedIntersection
+#bit[following] = 1 if connected with the corresponding node.
+#             9876543210
+map[0]=0b000000100010100
+map[1]=0b001000001000100
+map[2]=0b000000000101011
+map[3]=0b000000010011100
+map[4]=0b000001000001000
+map[5]=0b000110000000000
+map[6]=0b000110000000000
+map[7]=0b000000000001010
+map[8]=0b000000000000001
+map[9]=0b000000000000001
+map[10]=0b000000000000100
+map[11]=0b000000000000010
+map[12]=0b000000010000000
+
+
+#Table for the type of the nodes
+maptype[0]=0b01
+maptype[1]=0b01
+maptype[2]=0b10
+maptype[3]=0b10
+maptype[4]=0b11
+maptype[5]=0b11
+maptype[6]=0b11
+maptype[7]=0b11
+maptype[8]=0b00
+maptype[9]=0b00
+maptype[10]=0b00
+maptype[11]=0b00
+maptype[12]=0b00
+
+
+#Node type:
+#00=parking
+#01=roundabout
+#10=crossroad
+#11=branching
+#Information on the order of the nodes in an intersection 001 010 011 100
+#The bit bit coding represents the nodes connected with 3 bits(8 possibilities of connections) but it is saved on 16 bit therefore maximum 5 nodes per intersections with 001 == smallest connected node and 000 indicates null
+orientedIntersection[0]=0b011010001
+orientedIntersection[1]=0b011010001
+orientedIntersection[2]=0b011010100001
+orientedIntersection[3]=0b011010100001
+orientedIntersection[4]=0b010001
+orientedIntersection[5]=0b010001
+orientedIntersection[6]=0b010001
+orientedIntersection[7]=0b001010
+
+##########
+
+#Turn off some firmware behaviour
+#call leds.prox.h(0,0,0,0,0,0,0,0)
+#call leds.prox.v(0,0)
+#call leds.temperature(0,0)
+call prox.comm.enable(1)
+#subroutines called by communication
+
+#Stop the Thymio
+sub allStop
+	if  state!=S_STOP then
+		oldState=state
+		state=S_STOP
+		motor.left.target=0
+		motor.right.target=0
+	end
+
+#Make the Thymio moves	
+sub allStart
+	if  state==S_STOP then
+	state=oldState
+	speedType=savedSpeed
+end
+
+#Gives the compatible node in the variable newNode
+sub searchCompatibleNode 
+	nodeTab=[-1,-1,-1,-1,-1]
+	nodeCount=0
+	stick = map[currentNode]
+
+	#Making of the connected node table, it contains all the nodes connected to the currentNode. 
+	#It finds the index corresponding to the node were the Thymio comes from
+	t=0
+	oldIndice=-1
+	for i in 2:17 do
+		if maptype[currentNode] == 00 then
+			if stick%0b10 == 0b1 then
+					newNode = i-2
+					return 
+			end			
+		else
+			if stick%0b10 == 0b1 then
+				nodeTab[t]=i-2	
+				if  i-2==oldNode then
+					oldIndice=t
+				end
+				t++
+			end
+		end
+		stick = stick >> 1
+	end
+	
+	#Treatment of the case of the branching intersection
+	if maptype[currentNode] == 0b11 then
+		if  counterContinue==0 then
+			newNode=nodeTab[orientedIntersection[currentNode]%0b1000-1]
+		else
+			newNode=nodeTab[(orientedIntersection[currentNode]>>3)%0b1000-1]	
+			
+		end
+		return
+	end
+	
+	#Special case 1 treatment (see section 4.3 in Benjamin's report)
+	if oldIndice==-1 then
+
+		for i in 0:3 do
+			if i&lt;t then
+		
+		
+				stick = map[nodeTab[i]]
+				stick=stick>>(oldNode)
+				if stick%0b10 == 0b1  then
+					oldIndice=i
+				end
+			end
+		end
+		if oldIndice==-1 then
+			#If nothing is found, leave the loop
+			return
+		end
+	end
+	
+	stick=orientedIntersection[currentNode]
+	
+	test2=1
+	t=0
+	counNode=0
+	#Scan the oriented intersection the old node
+	while test2==1 do
+		if  stick%0b1000==(oldIndice+1) then
+			test2=0
+		end
+		counNode++
+		stick = stick >> 3
+		if counNode>4 then
+			return
+		end
+	end
+	
+	#Compute the exit taken during last intersection
+	counterContinue=counterContinue+2*countExit
+	if  counterContinue==0 then
+		counterContinue=2
+	end
+	
+	#Scan the intersection until reaching the right number of exit taken by the robot in it
+	countExit=1
+	for i in 0:4 do
+
+		if  counNode==5 then
+			stick=orientedIntersection[currentNode]
+			counNode = 0
+		end
+		if  stick%0b1000!=0b000 then
+
+			if countExit==(counterContinue/NbCont) then
+
+				newNode=nodeTab[stick%0b1000-1]
+				return
+			end
+			countExit++
+		end
+		counNode++
+		stick = stick >> 3
+	end
+
+
+###Routine of map management
+sub mapUpdate
+#Called when there is a modification of node(Edit error detection if two roundabout are next to each other)
+	callsub searchCompatibleNode
+	motor.left.target=0
+	motor.right.target=0
+	oldNode = currentNode
+	currentNode = newNode
+	if (maptype[newNode]%0b100) == newNodeType then
+	#LEDs to indicate node type
+		#if currentNode==0 then
+			#call leds.top(0,32,0)
+		#elseif currentNode==1 then
+			#call leds.top(32,0,0)
+		#else
+			#call leds.top(0,0,32)	
+		#end
+	else
+	#Special case 2 (see section 4.3 in Benjamin's report)
+		if maptype[newNode]%0b100==0b11 then
+	   		counterContinue=2
+		   	countExit=0
+			callsub searchCompatibleNode
+			oldNode = currentNode
+			currentNode = newNode
+		else
+			positionError = 1	
+		end
+	end
+	counterContinue = 0
+	countExit = 0
+		
+#Start the robot in a parking before the barcode		
+onevent button.forward
+	if  button.forward == 1 then
+		speedType = SPEED_LOW
+		state = S_EXIT
+		actionType = A_LOCATION
+		readLocation = 1
+		countPing=1
+		decisionState = DS_STOP
+		counter = 60
+	end
+		
+#Stop the robot
+onevent button.center
+	if  button.center == 1 then
+		motor.left.target = 0
+		motor.right.target = 0
+		state = S_STOP
+ 		#comm_state=CS_EAR
+ 		#last_ok =11
+ 		#i=0
+ 		#prox.comm.tx=0
+	end
+	
+onevent prox
+#if the robot is not stopped or across another road, it follows the line
+	if state != S_STOP and state != S_CONTINUE then
+		intensityDiff = prox.ground.delta[0]-GREY_REF
+		#The robot is given a reference mean value. Its speed is controlled to stay as close as possible
+		#to this value with a P controller. The gain (dividing factor) depends on the state.
+		if  state == S_ROAD or state == S_BACK then
+			controlFactor = 3
+		elseif  state == S_ACTION or state == S_EXIT then
+			controlFactor = 2
+		elseif  state == S_READ then
+			controlFactor = 6
+		end
+		addSpeedLeft = intensityDiff/controlFactor
+		addSpeedRight = -intensityDiff/controlFactor	
+				
+		#Obstacle avoidance
+		#In a crossroad, interior proximity sensor([1]) desactivated
+		if  (prox.horizontal[1] > proxInteriorFactor*OBS_PROX_THRESH or prox.horizontal[2] > OBS_PROX_THRESH or 
+				prox.horizontal[3] > OBS_PROX_THRESH) and (state == S_ROAD or state == S_ACTION or state == S_EXIT)
+				 then
+			#Collect the maximum intensity detected
+			call math.max(intensityObst,prox.horizontal[2], prox.horizontal[3])
+			call math.max(intensityObst,intensityObst, prox.horizontal[1]/proxInteriorFactor)
+			intensityDiffObst = intensityObst - OBS_PROX_THRESH
+			#Reduce the speed proportionally to the intensity.
+			if intensityDiffObst >= 0 then
+				motor.left.target = speedType+addSpeedLeft-intensityDiffObst/(75/(1+speedType/SPEED_LOW))
+				motor.right.target = speedType+addSpeedRight-intensityDiffObst/(75/(1+speedType/SPEED_LOW))
+			end
+			#Above the threshold, stop
+			if intensityObst > OBS_PROX_THRESH_MAX then
+				motor.left.target = 0
+				motor.right.target = 0
+			end
+		#Obstacle avoidance when going backward. If there is something, stop (no adaptation of speed
+		elseif  (prox.horizontal[5] > OBS_PROX_THRESH_MAX or prox.horizontal[6] > OBS_PROX_THRESH_MAX) and state 
+		==	S_BACK then
+				motor.left.target = 0
+				motor.right.target = 0
+		#No obstacle avoidance
+		else
+			motor.left.target = speedType + addSpeedLeft
+			motor.right.target = speedType + addSpeedRight
+			#If there is a too big difference, turn on itself (only on white part of gradient)
+			if abs intensityDiff > 300  then
+				motor.left.target = intensityDiff/4
+				motor.right.target = -intensityDiff/4
+			end
+		end
+	end
+	
+	#Reading synchro bit + security to be sure not to read the black side of the road
+	if state == S_ROAD and  prox.ground.delta[1] &lt; GREY_THRESH and prox.ground.delta[0] &lt; whiteThreshold then 
+		#If there is already someone reading the barcode, go backward.
+		if  (prox.horizontal[1] > OBS_PROX_THRESH or prox.horizontal[2] > OBS_PROX_THRESH or 
+		prox.horizontal[3] > OBS_PROX_THRESH) then
+				state = S_BACK
+				timer.period[0] = 1200
+				speedType = -SPEED_LOW
+				timerON = 1
+			#Go to the reading state.
+			else
+			oldState = state
+			state = S_READ
+			counterRead = 0
+			code = 0
+	   end
+	end
+	
+	#Reading barcode
+	if state == S_READ then
+		#Interval depending on the speed
+		interval = 2*SPEED_HIGH/speedType #count between two readings
+		counterRead++
+		#First time wait 1,5 interval to ben in the middle of the next bit
+		if  counterRead == 1+(3*interval-1)/2 then
+			if prox.ground.delta[1] &lt; GREY_THRESH then
+				code +=1
+			end
+		elseif  counterRead == 1+(5*interval-1)/2 then
+			if prox.ground.delta[1] &lt; GREY_THRESH then
+				code +=2
+			end
+		elseif  counterRead == 1+(7*interval-1)/2 then
+			if prox.ground.delta[1] &lt; GREY_THRESH then
+				code +=4
+			end
+		#Wait 1 additional interval to be sure to be across the barcode
+		elseif counterRead == 1+(9*interval-1)/2 then
+			state = oldState		
+			#Change state corresponding to the code read
+			if  state == S_ROAD then
+				if code == 1 then
+					speedType=SPEED_LOW
+				elseif  code == 2 then
+					speedType=SPEED_MED
+				elseif  code == 3 then
+					speedType=SPEED_HIGH
+				elseif code == 4 then
+					savedSpeed = speedType
+					speedType=SPEED_LOW
+					state = S_ACTION
+					actionType = A_BRANCHING
+					newNodeType = 0b11	
+					callsub mapUpdate	
+				elseif code == 5 then
+					savedSpeed = SPEED_LOW
+					speedType=SPEED_LOW
+					state = S_ACTION
+					actionType = A_CROSSROAD
+					call math.rand(random)
+					decisionState = random%3
+					newNodeType = 0b10	
+					callsub mapUpdate	
+				elseif code == 6 then
+					savedSpeed = SPEED_LOW
+					speedType=SPEED_LOW
+					state = S_ACTION
+					actionType = A_LOCATION
+					newNodeType = 0b00
+					callsub mapUpdate	
+				elseif code == 7 then
+					savedSpeed = speedType
+					speedType=SPEED_LOW
+					state = S_ACTION
+					actionType = A_ROUNDABOUT
+					newNodeType = 0b01			
+					callsub mapUpdate		
+				end
+				
+				if state == S_ACTION and actionType == A_CROSSROAD then
+					proxInteriorFactor = 7
+				else
+					proxInteriorFactor = 1					
+				end
+				
+			elseif readLocation == 1 then
+				#Actual position used to reset the map in real time
+				currentNode=code+7		
+			end
+		end
+	end
+	
+	#Intersection
+	if state == S_ACTION then
+		#Crossroad
+		if  actionType == A_CROSSROAD then
+		#decisionState =DS_EXIT
+			#After 4 Continue, the robot is out and goes back to road state
+			#The 4th continue starts directly after the 3rd one
+			if counterContinue == 3 then
+				state = S_CONTINUE
+			   counterContinue++
+			   counter = 0
+			elseif  counterContinue == 4 then
+				state=S_ROAD
+				speedType = savedSpeed
+			end
+		else
+			#Random choice when reading bit
+			call math.rand(random)
+			decisionState = random%2
+			#Parking and Branching
+			#If continue was chosen, return to road state after two readings
+			if (actionType == A_BRANCHING or actionType == A_LOCATION) and counterContinue == 2 then
+					state=S_ROAD
+					speedType = savedSpeed	
+			#Roundabout	
+			else
+				#Exit is possible only on even number of readings
+				if decisionState == DS_EXIT  and counterContinue%2 == 0 then
+					nbRond++
+				else
+					decisionState = DS_CONTINUE
+				end
+			end
+		end
+	end
+	
+	#Reading a bit + security and reading a code in a parking
+		if (state == S_ACTION or (state == S_EXIT and readLocation == 1)) and prox.ground.delta[1] &lt; GREY_THRESH and prox.ground.delta[0] &lt; 	whiteThreshold then
+		if readLocation == 1 then
+			oldState = state
+			state = S_READ	
+			counterRead = 0
+			code = 0
+		else
+			counter = 0
+			#Change state
+			if  decisionState == DS_EXIT then
+				state = S_EXIT
+			else
+				state = S_CONTINUE
+			    counterContinue++
+			   #In case of a crossroad and turning left, if 2 continue done, force exit decision state to follow
+			   #line
+			   if  (actionType == A_CROSSROAD and decisionState == DS_TURN_LEFT and counterContinue == 2) then
+					decisionState = DS_EXIT
+				end
+			end
+		end
+	end
+	
+	#Exit state	
+	if state == S_EXIT then
+		counter++
+		#In a parking, prepare to stop
+		if actionType==A_LOCATION then
+			if prox.ground.delta[1] > GREY_THRESH then
+				readLocation = 1
+			end
+			decisionState=DS_STOP
+		end
+		#Counter condition for other intersections
+		if  (counter > 41 and (actionType == A_ROUNDABOUT or actionType == A_BRANCHING)) or (counter > 29 and actionType == A_CROSSROAD) then
+			#If decision was to turn left, use exit state to follow line, then goes to action state (and not road)
+			countExit++
+			if  actionType == A_CROSSROAD and counterContinue != 0 then
+				state = S_ACTION													 
+				decisionState = DS_TURN_LEFT
+			else
+				#Goes back to road state excep for parking intersection
+				if decisionState!=DS_STOP then
+					state = S_ROAD
+					speedType = savedSpeed
+				end
+			end
+		end
+	end
+	
+	#Cross a road or cross a part without gradient
+	if state == S_CONTINUE then
+		counter++
+		#Due to placement after a left turn, the robot is never going straight. Therefore add a bias to make it 				
+		#turn slightly to the left, depends on intersection
+		motor.left.target = (85+actionType*3)*speedType/100
+		motor.right.target = speedType
+		
+		#Obstacle avoidance. If there is something, stop counter and stop moving
+		#In a crossroad, interior proximity sensor ([7]) desactivated
+		if (prox.horizontal[1] > proxInteriorFactor*OBS_PROX_THRESH or prox.horizontal[2] > OBS_PROX_THRESH or 
+				prox.horizontal[3] > OBS_PROX_THRESH)  then
+				savedSpeedInters = speedType
+				motor.left.target = 0
+				motor.right.target = 0
+				counter--
+				counterStop = 1
+		#No more obstacles
+		#Interior proximity sensor taken into account unless crossroad
+		elseif  counterStop == 1 and (prox.horizontal[1] &lt; OBS_PROX_THRESH/proxInteriorFactor and prox.horizontal[2] &lt; OBS_PROX_THRESH 
+		and prox.horizontal[3] &lt; OBS_PROX_THRESH) then
+			counterStop = 0
+			speedType = savedSpeedInters
+		end
+		
+		#Goes back to action state
+		if  counter > 21  then
+			state = S_ACTION
+		end
+	end
+	
+	#Parking stop
+	if decisionState == DS_STOP then
+		if ((prox.horizontal[1] > OBS_PROX_THRESH_MAX-100 or prox.horizontal[2] > OBS_PROX_THRESH_MAX-100 or 
+				prox.horizontal[3] > OBS_PROX_THRESH_MAX-100))  then
+				counter--
+		end
+		if counter > 130 then
+			#Increment only if traffic light is green
+			counter=counter + incrementCounter
+			state = S_STOP
+			motor.left.target = 0
+			motor.right.target = 0
+			#After a while goes back to road state
+			if counter > 150 then
+				decisionState = DS_NOTHING
+				speedType = savedSpeed
+				motor.left.target = speedType
+				motor.right.target = speedType
+				readLocation = 0
+				state = S_ROAD
+			end
+		end
+	end
+	
+	#LEDs to indicate state
+	if state == S_ROAD then
+		#call leds.top(32,(3-((speedType-SPEED_LOW)/SPEED_LOW))*8,0)
+	elseif  state == S_READ then
+		#call leds.top(32,32,32)
+	elseif state == S_ACTION then
+		call leds.top(0,10*actionType,10*(3-actionType))
+	end
+	
+#Communication	
+onevent prox.comm
+#  Bidirectionnal communication
+#	if comm_state==CS_TELL then
+#		if  prox.comm.rx==last_ok then
+#			#call leds.top(0,0,32)
+#			if  last_ok==10 then
+#				last_ok=11
+#			else
+#				last_ok=10
+#			end
+#			if i==1 then
+#				prox.comm.tx=currentNode+60	
+#			elseif i==2 then
+#				prox.comm.tx=oldNode+60
+#			else
+#				prox.comm.tx=currentNode + 100
+#
+#				timer.period[1]=2000
+# 				comm_state=CS_EAR
+# 				last_ok =11
+# 
+#
+#			end
+#			count++
+#			i++
+#		end
+#
+#	end
+	if comm_state==CS_EAR then
+		if maptype[currentNode]==0b10  then
+			if prox.comm.rx==oldNode+20 and counterContinue==0 and countExit == 0 then
+				callsub allStop
+				if  countPing==1 then
+					timer.period[1]=3000
+					prox.comm.tx=100+oldNode
+					countPing=2
+				end
+			else
+				if  prox.comm.rx==oldNode+40 then
+					 callsub allStart
+				end
+			end
+		end
+		if counter &lt; 150	then
+			if maptype[currentNode]==0b00 and counterContinue == 0 and prox.comm.rx == currentNode+20 then
+				callsub allStart
+				incrementCounter = 1
+			elseif maptype[currentNode]==0b00 and counterContinue == 1 and  prox.comm.rx == currentNode+20 then
+				callsub allStop
+				incrementCounter = 0
+			elseif  maptype[currentNode]%0b100==0b00 and counterContinue==0 and prox.comm.rx == currentNode+40 then
+				callsub allStop
+				incrementCounter = 0
+			elseif  maptype[currentNode]%0b100==0b00 and counterContinue==1 and prox.comm.rx == currentNode+40 then
+				callsub allStart
+				incrementCounter = 1
+			end
+		end
+#   Code for the communication state machine
+#	elseif prox.comm.rx==1 then
+#			comm_state=CS_TELL
+#			prox.comm.tx=3
+#			i=0
+#	Code for the Ping part
+		if prox.comm.rx>prox.comm.tx and countPing&lt;3 then
+					prox.comm.tx=prox.comm.rx
+		end
+		if prox.comm.rx>100 and prox.comm.rx-100- currentNode==((prox.comm.rx-100-currentNode)/20)*20 and countPing == 1 then
+			timer.period[1]=3000
+			prox.comm.tx=prox.comm.rx+20
+			countPing=2
+
+		end
+	end
+
+#Timer used to go backward
+onevent timer0
+	if timerON == 1  then
+		speedType = SPEED_LOW
+		state = S_ROAD
+		timerON = 0
+	end
+	
+#Timer used for communication	
+onevent timer1
+	if  comm_state==CS_EAR then
+		prox.comm.tx=0
+		
+	end
+	if  timer.period[1]==3000 then
+			countPing++
+	end
+
+	if  countPing>4 then
+		countPing=1
+		timer.period[1]=2000
+	end
+	
+	</node>
+
+
+</network>
